@@ -1,5 +1,4 @@
-#!/usr/bin/env python
-# -*- coding: utf-8 -*-
+#!/usr/bin/env python3
 from flask import Flask, render_template, Response
 from uvctypes import *
 import time
@@ -8,7 +7,6 @@ import numpy as np
 import rclpy
 from sensor_msgs.msg import Image
 from std_msgs.msg import Header
-from cv_bridge import CvBridge
 
 try:
     from queue import Queue
@@ -54,12 +52,15 @@ def display_temperature(img, val_k, loc, color):
     cv2.line(img, (x, y - 2), (x, y + 2), color, 1)
 
 def publish_image(image):
-    bridge = CvBridge()
-    ros_image = bridge.cv2_to_imgmsg(image, encoding="bgr8")
+    msg = Image()
+    msg.height = image.shape[0]
+    msg.width = image.shape[1]
+    msg.encoding = 'bgr8'
+    msg.data = image.tobytes()
     header = Header()
     header.stamp = rclpy.clock.Clock().now().to_msg()
-    ros_image.header = header
-    publisher.publish(ros_image)
+    msg.header = header
+    publisher.publish(msg)
 
 @app.before_first_request
 def before_start():
