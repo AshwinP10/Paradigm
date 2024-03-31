@@ -5,20 +5,19 @@ from uvctypes import *
 import time
 import cv2
 import numpy as np
+import rclpy
+from sensor_msgs.msg import Image
+from std_msgs.msg import Header
+from cv_bridge import CvBridge
+
 try:
     from queue import Queue
 except ImportError:
     from Queue import Queue
-import platform
-import rospy
-from sensor_msgs.msg import Image
-from cv_bridge import CvBridge
 
 BUF_SIZE = 2
 q = Queue(BUF_SIZE)
 app = Flask(__name__)
-bridge = CvBridge()
-publisher = None  # ROS publisher variable
 
 def py_frame_callback(frame, userptr):
     array_pointer = cast(frame.contents.data, POINTER(c_uint16 * (frame.contents.width * frame.contents.height)))
@@ -33,11 +32,6 @@ def py_frame_callback(frame, userptr):
 
     if not q.full():
         q.put(data)
-
-    # Publish ROS message here
-    if publisher is not None:
-        img_msg = bridge.cv2_to_imgmsg(data, encoding="mono16")
-        publisher.publish(img_msg)
 
 PTR_PY_FRAME_CALLBACK = CFUNCTYPE(None, POINTER(uvc_frame), c_void_p)(py_frame_callback)
 
@@ -58,6 +52,14 @@ def display_temperature(img, val_k, loc, color):
     x, y = loc
     cv2.line(img, (x - 2, y), (x + 2, y), color, 1)
     cv2.line(img, (x, y - 2), (x, y + 2), color, 1)
+
+def publish_image(image):
+    bridge = CvBridge()
+    ros_image = bridge.cv2_to_imgmsg(image, encoding="bgr8")
+    header = Header()
+    header.stamp = rclpy.clock.Clock().now().to_msg()
+    ros_image.header = header
+    publisher.publish(ros_image)
 
 @app.before_first_request
 def before_start():
@@ -104,15 +106,8 @@ def before_start():
         print("uvc_start_streaming failed: {0}".format(res))
         exit(1)
 
-##gen frame
 def generate_frames():
-    pasttime = int(time.time())
-    print('hi1')
     while True:
-        curr_time = int(time.time())
-        if (curr_time - pasttime) >= 180:
-            perform_manual_ffc(devh)
-            pasttime = curr_time
         data = q.get(True, 500)
         if data is None:
             break
@@ -122,6 +117,10 @@ def generate_frames():
         display_temperature(img, minVal, minLoc, (255, 0, 0))
         display_temperature(img, maxVal, maxLoc, (0, 0, 255))
         img_rgb = cv2.applyColorMap(img, cv2.COLORMAP_JET)
+
+        # Publish image as ROS message
+        publish_image(img_rgb)
+
         ret, buffer = cv2.imencode('.jpg', img_rgb)
         frame = buffer.tobytes()
         yield (b'--frame\r\n'
@@ -142,7 +141,12 @@ def man_ffc():
 
 if __name__ == '__main__':
     # Initialize ROS node and publisher
-    rospy.init_node('thermal_camera_publisher', anonymous=True)
-    publisher = rospy.Publisher('/thermal_camera/image', Image, queue_size=10)
-    
+    rclpy.init()
+    node = rclpy.create_node('thermal_camera_publisher')
+    publisher = node.create_publisher(Image, '/thermal_camera/image', 10)
+
     app.run(host='0.0.0.0', debug=True, port="5000")
+
+    # Spin ROS node
+    rclpy.spin(node)
+    rclpy.shutdown()
